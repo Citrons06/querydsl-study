@@ -1,7 +1,12 @@
 package querydsl;
 
+import com.querydsl.core.BooleanBuilder;
 import com.querydsl.core.QueryResults;
 import com.querydsl.core.Tuple;
+import com.querydsl.core.types.ExpressionUtils;
+import com.querydsl.core.types.Predicate;
+import com.querydsl.core.types.Projections;
+import com.querydsl.core.types.dsl.BooleanExpression;
 import com.querydsl.core.types.dsl.CaseBuilder;
 import com.querydsl.core.types.dsl.Expressions;
 import com.querydsl.core.types.dsl.NumberExpression;
@@ -14,7 +19,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.annotation.Commit;
 import org.springframework.transaction.annotation.Transactional;
+import querydsl.dto.MemberDto;
+import querydsl.dto.QMemberDto;
+import querydsl.dto.UserDto;
 import querydsl.entity.Member;
 import querydsl.entity.QMember;
 import querydsl.entity.Team;
@@ -104,10 +113,10 @@ public class QuerydslBasicTest {
                 .selectFrom(member)
                 .fetch();
 
-        //단 건 조회
+        /*//단 건 조회
         Member fetchOne = query
                 .selectFrom(member)
-                .fetchOne();
+                .fetchOne();*/
 
         //limit(1).fetchOne()
         Member fetchFirst = query
@@ -324,6 +333,7 @@ public class QuerydslBasicTest {
                 .where(member.username.eq("member1"))
                 .fetchOne();
 
+        //로딩 여부 확인
         boolean loaded = emf.getPersistenceUnitUtil().isLoaded(findMember.getTeam());
         assertThat(loaded).as("패치 조인 미적용").isFalse();
     }
@@ -489,6 +499,284 @@ public class QuerydslBasicTest {
                 .from(member)
                 .where(member.username.eq("member1"))
                 .fetch();
+        for (String s : result) {
+            System.out.println("s = " + s);
+        }
+    }
+
+    /**
+     * 프로젝션 대상이 하나
+     */
+    @Test
+    void simpleProjection() {
+        List<String> result = query
+                .select(member.username)
+                .from(member)
+                .fetch();
+
+        for (String s : result) {
+            System.out.println("s = " + s);
+        }
+    }
+
+    /**
+     * 프로젝션 대상이 둘 이상: 튜플
+     */
+    @Test
+    void tupleProjection() {
+        List<Tuple> result = query
+                .select(member.username, member.age)
+                .from(member)
+                .fetch();
+
+        for (Tuple tuple : result) {
+            String username = tuple.get(member.username);
+            Integer age = tuple.get(member.age);
+            System.out.println("username = " + username + ", age = " + age);
+        }
+    }
+
+    /**
+     * 순수 JPA에서 DTO 조회
+     */
+    @Test
+    void findDtoJPQL() {
+        List<MemberDto> result = em.createQuery("select new querydsl.dto.MemberDto(m.username, m.age)" +
+                        " from Member m", MemberDto.class)
+                .getResultList();
+
+        for (MemberDto memberDto : result) {
+            System.out.println("memberDto = " + memberDto);
+        }
+    }
+
+    /**
+     * Querydsl DTO 조회 - 프로퍼티 접근
+     */
+    @Test
+    void findDtoBySetter() {
+        List<MemberDto> result = query
+                .select(Projections.bean(MemberDto.class,
+                        member.username,
+                        member.age))
+                .from(member)
+                .fetch();
+
+        for (MemberDto memberDto : result) {
+            System.out.println("memberDto = " + memberDto);
+        }
+    }
+
+    /**
+     * Querydsl DTO 조회 - 필드 직접 접근
+     */
+    @Test
+    void findDtoByField() {
+        List<MemberDto> result = query
+                .select(Projections.fields(MemberDto.class,
+                        member.username,
+                        member.age))
+                .from(member)
+                .fetch();
+
+        for (MemberDto memberDto : result) {
+            System.out.println("memberDto = " + memberDto);
+        }
+    }
+
+    /**
+     * Querydsl DTO 조회 - 생성자 접근
+     */
+    @Test
+    void findDtoByConstructor() {
+        List<UserDto> result = query
+                .select(Projections.constructor(UserDto.class,
+                        member.username,
+                        member.age))
+                .from(member)
+                .fetch();
+
+        for (UserDto memberDto : result) {
+            System.out.println("memberDto = " + memberDto);
+        }
+    }
+
+    /**
+     * Querydsl DTO 조회 - 별칭이 다를 때
+     */
+    @Test
+    void findUserDto() {
+        QMember memberSub = new QMember("memberSub");
+
+        List<UserDto> result = query
+                .select(Projections.fields(UserDto.class,
+                        member.username.as("name"),
+
+                        ExpressionUtils.as(
+                                JPAExpressions
+                                        .select(memberSub.age.max())
+                                        .from(memberSub), "age")
+                        ))
+                .from(member)
+                .fetch();
+
+        for (UserDto userDto : result) {
+            System.out.println("userDto = " + userDto);
+        }
+    }
+
+    @Test
+    void findDtoByQueryProjection() {
+        List<MemberDto> result = query
+                .select(new QMemberDto(member.username, member.age))
+                .from(member)
+                .fetch();
+
+        for (MemberDto memberDto : result) {
+            System.out.println("memberDto = " + memberDto);
+        }
+    }
+
+    /**
+     * 동적 쿼리 - BooleanBuilder
+     */
+    @Test
+    void dynamic_BooleanBuilder() {
+        String usernameParam = "member1";
+        Integer ageParam = 10;
+
+        List<Member> result = searchMember1(usernameParam, ageParam);
+        assertThat(result.size()).isEqualTo(1);
+    }
+
+    private List<Member> searchMember1(String usernameCond, Integer ageCond) {
+
+        BooleanBuilder builder = new BooleanBuilder(member.username.eq(usernameCond));
+        if (usernameCond != null) {
+            builder.and(member.username.eq(usernameCond));
+        }
+
+        if (ageCond != null) {
+            builder.and(member.age.eq(ageCond));
+        }
+
+        return query
+                .selectFrom(member)
+                .where(builder)
+                .fetch();
+    }
+
+    /**
+     * 동적 쿼리 - Where 다중 파라미터 사용
+     */
+    @Test
+    void dynamic_WhereParam() {
+        String usernameParam = "member1";
+        Integer ageParam = 10;
+
+        List<Member> result = searchMember2(usernameParam, ageParam);
+        assertThat(result.size()).isEqualTo(1);
+    }
+
+    private List<Member> searchMember2(String usernameCond, Integer ageCond) {
+        return query
+                .selectFrom(member)
+                //.where(usernameEq(usernameCond), ageEq(ageCond))
+                .where(allEq(usernameCond, ageCond))
+                .fetch();
+    }
+
+    private BooleanExpression allEq(String usernameCond, Integer ageCond) {
+        return usernameEq(usernameCond).and(ageEq(ageCond));
+    }
+
+    private BooleanExpression usernameEq(String usernameCond) {
+        return usernameCond != null ? member.username.eq(usernameCond) : null;
+    }
+
+    private BooleanExpression ageEq(Integer ageCond) {
+        return ageCond != null ? member.age.eq(ageCond) : null;
+    }
+
+    /**
+     * 쿼리 한 번으로 대량 데이터 수정
+     */
+    @Test
+    void bulkUpdate() {
+        long count = query
+                .update(member)
+                .set(member.username, "성인")
+                .where(member.age.goe(20))
+                .execute();
+
+        em.flush();
+        em.clear();
+
+        List<Member> result = query
+                .selectFrom(member)
+                .fetch();
+
+        for (Member member1 : result) {
+            System.out.println("member1 = " + member1);
+        }
+    }
+
+    /**
+     * 기존 숫자에 더하기
+     */
+    @Test
+    void bulkAdd() {
+        long count = query
+                .update(member)
+                .set(member.age, member.age.add(1))
+                .execute();
+    }
+
+    /**
+     * 대량 데이터 삭제
+     */
+    @Test
+    void bulkDelete() {
+        long count = query
+                .delete(member)
+                .where(member.age.gt(18))
+                .execute();
+    }
+
+    /**
+     * SQL Function 호출
+     * member -> M으로 변경하여 조회
+     */
+    @Test
+    void sqlFunction() {
+        List<String> result = query
+                .select(
+                        Expressions.stringTemplate(
+                                "function('replace', {0}, {1}, {2})",
+                                member.username, "member", "M"))
+                .from(member)
+                .fetch();
+
+        for (String s : result) {
+            System.out.println("s = " + s);
+        }
+    }
+
+    /**
+     * 대문자 => 소문자
+     */
+    @Test
+    void sqlFunction2() {
+        List<String> result = query
+                .select(member.username)
+                .from(member)
+                /*.where(member.username.eq(
+                        Expressions.stringTemplate(
+                                "function('lower', {0})",
+                                member.username)))*/
+                .where(member.username.eq(member.username.lower()))
+                .fetch();
+
         for (String s : result) {
             System.out.println("s = " + s);
         }
