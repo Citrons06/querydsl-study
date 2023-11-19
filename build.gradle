@@ -47,3 +47,5 @@ tasks.named('bootBuildImage') {
 tasks.named('test') {
 	useJUnitPlatform()
 }
+
+def querydslDir = "$buildDir/generated/querydsl"
